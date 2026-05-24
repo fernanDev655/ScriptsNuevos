@@ -6,25 +6,22 @@
 #  Uso: sudo bash setup_servidor.sh
 # ============================================================
 
-# --- Colores ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # Sin color
+NC='\033[0m'
 
-# --- Funciones de log ---
 ok()   { echo -e "${GREEN}[✔]${NC} $1"; }
 info() { echo -e "${BLUE}[i]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✘] ERROR:${NC} $1"; exit 1; }
-step() { echo -e "\n${CYAN}${BOLD}══════════════════════════════════════${NC}"; \
-         echo -e "${CYAN}${BOLD}  $1${NC}"; \
+step() { echo -e "\n${CYAN}${BOLD}══════════════════════════════════════${NC}";
+         echo -e "${CYAN}${BOLD}  $1${NC}";
          echo -e "${CYAN}${BOLD}══════════════════════════════════════${NC}"; }
 
-# --- Comprobar que se ejecuta como root ---
 if [[ $EUID -ne 0 ]]; then
   err "Este script debe ejecutarse como root: sudo bash setup_servidor.sh"
 fi
@@ -47,21 +44,33 @@ echo -e "  Se te pedirán algunos datos antes de empezar.\n"
 # ============================================================
 step "CONFIGURACIÓN INICIAL"
 
-# --- Interfaz de red ---
+# --- Usuario del sistema ---
+read -rp "  Usuario del sistema (el que usará la app) [$SUDO_USER]: " APP_USER
+APP_USER=${APP_USER:-$SUDO_USER}
+[[ -z "$APP_USER" ]] && err "No se pudo detectar el usuario. Introdúcelo manualmente."
+
+# --- PostgreSQL ---
+read -rp "  Contraseña para el usuario PostgreSQL 'concesionario_user': " -s PG_PASSWORD
+echo ""
+[[ -z "$PG_PASSWORD" ]] && err "La contraseña no puede estar vacía."
+
+# --- Datos de red (se usarán AL FINAL) ---
+echo ""
+info "Ahora introduce los datos para la IP estática (se aplicará al final):"
+echo ""
 info "Interfaces de red disponibles:"
 ip link show | grep -E "^[0-9]+:" | awk '{print "    " $2}' | tr -d ':'
 echo ""
 read -rp "  Nombre de la interfaz de red (ej: enp0s3, eth0): " NET_IFACE
 [[ -z "$NET_IFACE" ]] && err "Debes introducir el nombre de la interfaz."
 
-# --- IP estática ---
-read -rp "  IP estática que quieres asignar (ej: 192.168.1.100): " STATIC_IP
+read -rp "  IP estática que quieres asignar (ej: 192.168.100.2): " STATIC_IP
 [[ -z "$STATIC_IP" ]] && err "Debes introducir una IP."
 
 read -rp "  Máscara de red en CIDR (ej: 24 para /24): " CIDR
 CIDR=${CIDR:-24}
 
-read -rp "  Puerta de enlace / Gateway (ej: 192.168.1.1): " GATEWAY
+read -rp "  Puerta de enlace / Gateway (ej: 192.168.100.1): " GATEWAY
 [[ -z "$GATEWAY" ]] && err "Debes introducir el gateway."
 
 read -rp "  DNS primario [8.8.8.8]: " DNS1
@@ -70,66 +79,29 @@ DNS1=${DNS1:-8.8.8.8}
 read -rp "  DNS secundario [1.1.1.1]: " DNS2
 DNS2=${DNS2:-1.1.1.1}
 
-echo ""
-
-# --- Usuario del sistema ---
-read -rp "  Usuario del sistema (el que usará la app) [$USER]: " APP_USER
-APP_USER=${APP_USER:-$USER}
-
-# --- PostgreSQL ---
-read -rp "  Contraseña para el usuario PostgreSQL 'concesionario_user': " -s PG_PASSWORD
-echo ""
-[[ -z "$PG_PASSWORD" ]] && err "La contraseña no puede estar vacía."
-
-# --- Confirmar ---
-echo ""
-echo -e "${BOLD}  ┌─ Resumen de configuración ──────────────────┐${NC}"
-echo -e "  │  Interfaz:     ${CYAN}$NET_IFACE${NC}"
-echo -e "  │  IP estática:  ${CYAN}$STATIC_IP/$CIDR${NC}"
-echo -e "  │  Gateway:      ${CYAN}$GATEWAY${NC}"
-echo -e "  │  DNS:          ${CYAN}$DNS1, $DNS2${NC}"
-echo -e "  │  Usuario app:  ${CYAN}$APP_USER${NC}"
-echo -e "  │  Usuario PG:   ${CYAN}concesionario_user${NC}"
-echo -e "${BOLD}  └──────────────────────────────────────────────┘${NC}"
-echo ""
-read -rp "  ¿Continuar con esta configuración? [s/N]: " CONFIRM
-[[ "$CONFIRM" != "s" && "$CONFIRM" != "S" ]] && echo "Cancelado." && exit 0
-
 APP_DIR="/home/$APP_USER/concesionario"
 
-# ============================================================
-# PASO 1 — IP ESTÁTICA
-# ============================================================
-step "PASO 1/7 · IP Estática"
-
-NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
-
-# Backup del archivo actual
-if [[ -f "$NETPLAN_FILE" ]]; then
-  cp "$NETPLAN_FILE" "${NETPLAN_FILE}.bak"
-  info "Backup guardado en ${NETPLAN_FILE}.bak"
-fi
-
-cat > "$NETPLAN_FILE" <<EOF
-network:
-  version: 2
-  ethernets:
-    ${NET_IFACE}:
-      dhcp4: false
-      addresses:
-        - ${STATIC_IP}/${CIDR}
-      gateway4: ${GATEWAY}
-      nameservers:
-        addresses: [${DNS1}, ${DNS2}]
-EOF
-
-chmod 600 "$NETPLAN_FILE"
-netplan apply && ok "IP estática $STATIC_IP aplicada en $NET_IFACE" || warn "Netplan aplicado con advertencias (puede ser normal)"
+# Confirmación
+echo ""
+echo -e "${BOLD}  ┌─ Resumen de configuración ──────────────────┐${NC}"
+echo -e "  │  Usuario app:    ${CYAN}$APP_USER${NC}"
+echo -e "  │  Usuario PG:     ${CYAN}concesionario_user${NC}"
+echo -e "  │  Interfaz red:   ${CYAN}$NET_IFACE${NC}"
+echo -e "  │  IP estática:    ${CYAN}$STATIC_IP/$CIDR${NC}"
+echo -e "  │  Gateway:        ${CYAN}$GATEWAY${NC}"
+echo -e "  │  DNS:            ${CYAN}$DNS1, $DNS2${NC}"
+echo -e "  │"
+echo -e "  │  ${YELLOW}⚠ La IP estática se aplicará AL FINAL${NC}"
+echo -e "  │  ${YELLOW}  para no perder internet durante la instalación${NC}"
+echo -e "${BOLD}  └──────────────────────────────────────────────┘${NC}"
+echo ""
+read -rp "  ¿Continuar? [s/N]: " CONFIRM
+[[ "$CONFIRM" != "s" && "$CONFIRM" != "S" ]] && echo "Cancelado." && exit 0
 
 # ============================================================
-# PASO 2 — SSH
+# PASO 1 — SSH
 # ============================================================
-step "PASO 2/7 · SSH y Firewall"
+step "PASO 1/6 · SSH y Firewall"
 
 apt-get update -qq
 apt-get install -y openssh-server -qq
@@ -137,18 +109,17 @@ systemctl enable ssh
 systemctl start ssh
 ok "OpenSSH instalado y activo"
 
-# Firewall
 ufw --force enable
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow "Apache Full" 2>/dev/null || true
 ok "UFW activado · puertos 22 y 80 abiertos"
-info "SFTP disponible automáticamente por el puerto 22 (no necesita configuración extra)"
+info "SFTP disponible automáticamente por el puerto 22"
 
 # ============================================================
-# PASO 3 — JAVA 17
+# PASO 2 — JAVA 17
 # ============================================================
-step "PASO 3/7 · Java 17"
+step "PASO 2/6 · Java 17"
 
 if java -version 2>&1 | grep -q "17"; then
   ok "Java 17 ya está instalado"
@@ -156,32 +127,26 @@ else
   apt-get install -y openjdk-17-jdk -qq
   ok "Java 17 instalado"
 fi
-
-JAVA_VERSION=$(java -version 2>&1 | head -1)
-info "Versión: $JAVA_VERSION"
+info "Versión: $(java -version 2>&1 | head -1)"
 
 # ============================================================
-# PASO 4 — POSTGRESQL
+# PASO 3 — POSTGRESQL
 # ============================================================
-step "PASO 4/7 · PostgreSQL"
+step "PASO 3/6 · PostgreSQL"
 
 apt-get install -y postgresql postgresql-contrib -qq
 systemctl enable postgresql
 systemctl start postgresql
 ok "PostgreSQL instalado y activo"
 
-# Crear usuario y base de datos
 info "Creando usuario y base de datos..."
-
 sudo -u postgres psql <<EOSQL
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'concesionario_user') THEN
     CREATE USER concesionario_user WITH PASSWORD '${PG_PASSWORD}';
-    RAISE NOTICE 'Usuario concesionario_user creado.';
   ELSE
     ALTER USER concesionario_user WITH PASSWORD '${PG_PASSWORD}';
-    RAISE NOTICE 'Usuario concesionario_user ya existía. Contraseña actualizada.';
   END IF;
 END
 \$\$;
@@ -191,12 +156,10 @@ SELECT 'CREATE DATABASE concesionario OWNER concesionario_user'
 
 GRANT ALL PRIVILEGES ON DATABASE concesionario TO concesionario_user;
 EOSQL
-
 ok "Usuario y base de datos PostgreSQL listos"
 
-# --- Schema PostgreSQL ---
-info "Creando schema (tablas)..."
-
+# --- Schema ---
+info "Creando tablas..."
 SCHEMA_FILE="/tmp/schema_pg.sql"
 cat > "$SCHEMA_FILE" <<'EOSQL'
 CREATE TABLE IF NOT EXISTS users (
@@ -235,9 +198,8 @@ EOSQL
 sudo -u postgres psql -d concesionario -f "$SCHEMA_FILE" -q
 ok "Tablas creadas"
 
-# --- Datos iniciales ---
+# --- Datos ---
 info "Insertando datos iniciales..."
-
 DATA_FILE="/tmp/data_pg.sql"
 cat > "$DATA_FILE" <<'EOSQL'
 INSERT INTO vehiculos (id, marca, modelo, anyo, precio, categoria, matricula, descripcion)
@@ -280,40 +242,37 @@ EOSQL
 sudo -u postgres psql -d concesionario -f "$DATA_FILE" -q
 ok "Datos insertados"
 
-# --- Permisos sobre tablas y secuencias ---
+# --- Permisos ---
 info "Aplicando permisos sobre tablas y secuencias..."
-
 sudo -u postgres psql -d concesionario <<EOSQL
 GRANT ALL PRIVILEGES ON ALL TABLES    IN SCHEMA public TO concesionario_user;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO concesionario_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES    TO concesionario_user;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO concesionario_user;
 EOSQL
-
 ok "Permisos PostgreSQL aplicados"
 
 # ============================================================
-# PASO 5 — DIRECTORIO DE LA APP
+# PASO 4 — DIRECTORIO DE LA APP
 # ============================================================
-step "PASO 5/7 · Directorio de la aplicación"
+step "PASO 4/6 · Directorio de la aplicación"
 
 mkdir -p "$APP_DIR"
 chown "$APP_USER":"$APP_USER" "$APP_DIR"
 ok "Directorio $APP_DIR creado y asignado a $APP_USER"
-info "Sube el JAR a este directorio desde el cliente con SFTP"
 
 # ============================================================
-# PASO 6 — APACHE REVERSE PROXY
+# PASO 5 — APACHE REVERSE PROXY
 # ============================================================
-step "PASO 6/7 · Apache Reverse Proxy"
+step "PASO 5/6 · Apache Reverse Proxy"
 
 apt-get install -y apache2 -qq
 systemctl enable apache2
 systemctl start apache2
 
-a2enmod proxy       -q
-a2enmod proxy_http  -q
-a2enmod rewrite     -q
+a2enmod proxy      -q
+a2enmod proxy_http -q
+a2enmod rewrite    -q
 
 VHOST_FILE="/etc/apache2/sites-available/concesionario.conf"
 cat > "$VHOST_FILE" <<EOF
@@ -332,16 +291,14 @@ EOF
 a2ensite  concesionario.conf -q
 a2dissite 000-default.conf   -q
 systemctl reload apache2
-
 ok "Apache configurado como reverse proxy → puerto 80 → :8088"
 
 # ============================================================
-# PASO 7 — SERVICIO SYSTEMD
+# PASO 6 — SERVICIO SYSTEMD
 # ============================================================
-step "PASO 7/7 · Servicio systemd"
+step "PASO 6/6 · Servicio systemd"
 
 JAR_PATH="$APP_DIR/concesionario2-0.0.1-SNAPSHOT.jar"
-
 cat > /etc/systemd/system/concesionario.service <<EOF
 [Unit]
 Description=Concesionario Spring Boot App
@@ -364,8 +321,46 @@ EOF
 
 systemctl daemon-reload
 systemctl enable concesionario
-ok "Servicio 'concesionario' registrado y habilitado para arranque automático"
-warn "El servicio NO se inicia ahora — espera a que subas el JAR desde el cliente"
+ok "Servicio 'concesionario' registrado y habilitado"
+warn "El servicio arrancará cuando el cliente suba el JAR"
+
+# ============================================================
+# ÚLTIMO PASO — IP ESTÁTICA (al final para no perder internet)
+# ============================================================
+step "ÚLTIMO PASO · IP Estática"
+
+NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
+
+if [[ -f "$NETPLAN_FILE" ]]; then
+  cp "$NETPLAN_FILE" "${NETPLAN_FILE}.bak"
+  info "Backup guardado en ${NETPLAN_FILE}.bak"
+fi
+
+cat > "$NETPLAN_FILE" <<EOF
+network:
+  version: 2
+  ethernets:
+    ${NET_IFACE}:
+      dhcp4: false
+      addresses:
+        - ${STATIC_IP}/${CIDR}
+      gateway4: ${GATEWAY}
+      nameservers:
+        addresses: [${DNS1}, ${DNS2}]
+EOF
+
+chmod 600 "$NETPLAN_FILE"
+
+warn "A punto de aplicar IP estática $STATIC_IP en $NET_IFACE"
+warn "Si estás conectado por SSH, la sesión se cortará. ¡Es normal!"
+echo ""
+read -rp "  ¿Aplicar IP estática ahora? [s/N]: " APPLY_IP
+
+if [[ "$APPLY_IP" == "s" || "$APPLY_IP" == "S" ]]; then
+  netplan apply && ok "IP estática $STATIC_IP aplicada" || warn "Netplan aplicado con advertencias"
+else
+  info "Puedes aplicarla manualmente después con: sudo netplan apply"
+fi
 
 # ============================================================
 # VERIFICACIÓN FINAL
@@ -373,16 +368,12 @@ warn "El servicio NO se inicia ahora — espera a que subas el JAR desde el clie
 step "VERIFICACIÓN FINAL"
 
 echo ""
-check_service() {
-  systemctl is-active --quiet "$1" && ok "$1 activo" || warn "$1 NO está activo"
-}
+systemctl is-active --quiet ssh        && ok "SSH activo"        || warn "SSH NO activo"
+systemctl is-active --quiet postgresql && ok "PostgreSQL activo" || warn "PostgreSQL NO activo"
+systemctl is-active --quiet apache2    && ok "Apache activo"     || warn "Apache NO activo"
 
-check_service ssh
-check_service postgresql
-check_service apache2
-
-info "Comprobando conexión a base de datos..."
-sudo -u postgres psql -d concesionario -c "\dt" -q 2>/dev/null && ok "Tablas accesibles en PostgreSQL" || warn "No se pudo conectar a PostgreSQL"
+info "Comprobando tablas PostgreSQL..."
+sudo -u postgres psql -d concesionario -c "\dt" -q 2>/dev/null && ok "Tablas accesibles" || warn "No se pudo verificar PostgreSQL"
 
 # ============================================================
 # RESUMEN FINAL
@@ -399,8 +390,7 @@ echo -e "  ${BOLD}Usuario sistema:${NC}     ${CYAN}$APP_USER${NC}"
 echo -e "  ${BOLD}Directorio JAR:${NC}      ${CYAN}$APP_DIR${NC}"
 echo -e "  ${BOLD}Usuario PostgreSQL:${NC}  ${CYAN}concesionario_user${NC}"
 echo ""
-echo -e "  ${YELLOW}PRÓXIMO PASO:${NC} Ejecuta ${BOLD}setup_cliente.sh${NC} en tu máquina cliente"
-echo -e "  para compilar y subir el JAR al servidor."
+echo -e "  ${YELLOW}PRÓXIMO PASO:${NC} Ejecuta ${BOLD}setup_cliente.sh${NC} en la VM cliente"
 echo ""
 echo -e "  Una vez subido el JAR, arranca la app con:"
 echo -e "  ${CYAN}sudo systemctl start concesionario${NC}"
